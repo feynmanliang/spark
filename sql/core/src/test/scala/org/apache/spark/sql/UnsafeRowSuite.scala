@@ -79,7 +79,7 @@ class UnsafeRowSuite extends SparkFunSuite {
     assert(field0StringFromArrayBackedRow === field0StringFromOffheapRow)
   }
 
-  test("calling getUTF8String() on non-null columns") {
+  test("calling getString() on non-null column") {
     val inputString = "abc"
     val row = InternalRow.apply(inputString)
     val unsafeRow = UnsafeProjection.create(Array[DataType](StringType)).apply(row)
