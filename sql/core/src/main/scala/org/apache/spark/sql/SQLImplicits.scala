@@ -17,7 +17,6 @@
 
 package org.apache.spark.sql
 
-
 import scala.collection.mutable.ArrayBuffer
 import scala.language.implicitConversions
 import scala.reflect.runtime.universe.TypeTag
@@ -173,6 +172,8 @@ private[sql] abstract class SQLImplicits {
             }
           }.asInstanceOf[RDD[Row]]
         }
+
+        override def toString: String = getClass.getSimpleName + s"[${df.toString}]"
       }
       (cachedRDD, DataFrame(_sqlContext, LogicalRelation(baseRelation)))
     }
