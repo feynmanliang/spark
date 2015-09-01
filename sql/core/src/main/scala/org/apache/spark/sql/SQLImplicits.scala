@@ -124,7 +124,7 @@ private[sql] abstract class SQLImplicits {
    * @since 1.5.1
    */
   @Experimental
-  private[sql] implicit class TungstenCache(df: DataFrame) extends Serializable {
+  implicit class TungstenCache(df: DataFrame) extends Serializable {
     /**
      * Packs the rows of [[df]] into contiguous blocks of memory.
      */
