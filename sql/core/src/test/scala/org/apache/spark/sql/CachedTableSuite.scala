@@ -339,7 +339,7 @@ class CachedTableSuite extends QueryTest with SharedSQLContext {
 
   test("tungsten cache table and read") {
     val data = testData
-    val tungstenCached = data.tungstenCache()
-    assert(tungstenCached.collect() === testData.collect())
+    val (cachedRDD, tungstenCachedDF) = data.tungstenCache()
+    assert(tungstenCachedDF.collect() === testData.collect())
   }
 }

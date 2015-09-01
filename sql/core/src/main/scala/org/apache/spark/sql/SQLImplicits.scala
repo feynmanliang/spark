@@ -128,7 +128,7 @@ private[sql] abstract class SQLImplicits {
     /**
      * Packs the rows of [[df]] into contiguous blocks of memory.
      */
-    def tungstenCache(): DataFrame = {
+    def tungstenCache(): (RDD[_], DataFrame) = {
       val schema = df.schema
 
       val convert = CatalystTypeConverters.createToCatalystConverter(schema)
@@ -139,7 +139,6 @@ private[sql] abstract class SQLImplicits {
         .getSizeInBytes
       val cachedRDD = internalRows.mapPartitions { iter =>
         val buffers = new ArrayBuffer[MemoryBlock]()
-        // TODO?: make UnsafeProjection.create code gen serializable
         val convertToUnsafe = UnsafeProjection.create(schema)
         val memoryAllocator = new UnsafeMemoryAllocator()
         iter.foreach { row =>
@@ -175,7 +174,7 @@ private[sql] abstract class SQLImplicits {
           }.asInstanceOf[RDD[Row]]
         }
       }
-      DataFrame(_sqlContext, LogicalRelation(baseRelation))
+      (cachedRDD, DataFrame(_sqlContext, LogicalRelation(baseRelation)))
     }
   }
 }
