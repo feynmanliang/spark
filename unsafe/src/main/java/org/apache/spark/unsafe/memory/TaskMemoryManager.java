@@ -175,6 +175,16 @@ public class TaskMemoryManager {
   }
 
   /**
+   * Allocates a contiguous block of memory, without checking for leaks provided by
+   * {@code allocatedNonPageMemory}
+   */
+  public MemoryBlock allocateUnchecked(long size) throws OutOfMemoryError {
+    assert(size > 0) : "Size must be positive, but got " + size;
+    final MemoryBlock memory = executorMemoryManager.allocate(size);
+    return memory;
+  }
+
+  /**
    * Free memory allocated by {@link TaskMemoryManager#allocate(long)}.
    */
   public void free(MemoryBlock memory) {

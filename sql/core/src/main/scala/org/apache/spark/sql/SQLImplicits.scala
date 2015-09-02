@@ -17,6 +17,10 @@
 
 package org.apache.spark.sql
 
+import org.apache.spark.SparkEnv
+import org.apache.spark.storage.StorageLevel
+import org.apache.spark.unsafe.Platform
+
 import scala.collection.mutable.ArrayBuffer
 import scala.language.implicitConversions
 import scala.reflect.runtime.universe.TypeTag
@@ -29,7 +33,7 @@ import org.apache.spark.sql.catalyst.expressions.{UnsafeProjection, UnsafeRow, S
 import org.apache.spark.sql.execution.datasources.LogicalRelation
 import org.apache.spark.sql.sources.{TableScan, BaseRelation}
 import org.apache.spark.sql.types.StructField
-import org.apache.spark.unsafe.memory.{UnsafeMemoryAllocator, MemoryBlock}
+import org.apache.spark.unsafe.memory.{TaskMemoryManager, UnsafeMemoryAllocator, MemoryBlock}
 import org.apache.spark.unsafe.types.UTF8String
 
 /**
@@ -124,6 +128,7 @@ private[sql] abstract class SQLImplicits {
    */
   @Experimental
   implicit class TungstenCache(df: DataFrame) extends Serializable {
+    private val BLOCK_SIZE = 4000000 // 4 MB blocks
     /**
      * Packs the rows of [[df]] into contiguous blocks of memory.
      */
@@ -132,22 +137,41 @@ private[sql] abstract class SQLImplicits {
 
       val convert = CatalystTypeConverters.createToCatalystConverter(schema)
       val internalRows = df.rdd.map(convert(_).asInstanceOf[InternalRow])
-      val rowSizeInBytes: Int = UnsafeProjection
-        .create(schema)
-        .apply(internalRows.first())
-        .getSizeInBytes
-      val cachedRDD = internalRows.mapPartitions { iter =>
-        val buffers = new ArrayBuffer[MemoryBlock]()
+      val cachedRDD = internalRows.mapPartitions { rowIterator =>
+        val bufferedRowIterator = rowIterator.buffered
+
         val convertToUnsafe = UnsafeProjection.create(schema)
-        val memoryAllocator = new UnsafeMemoryAllocator()
-        iter.foreach { row =>
-          val unsafeRow = convertToUnsafe.apply(row)
-          val block = memoryAllocator.allocate(rowSizeInBytes)
-          unsafeRow.writeToMemory(block.getBaseObject, block.getBaseOffset)
-          buffers.append(block)
+        val taskMemoryManager = new TaskMemoryManager(SparkEnv.get.executorMemoryManager)
+        new Iterator[MemoryBlock] {
+
+          // This assumes that at least one row will fit in BLOCK_SIZE
+          def next(): MemoryBlock = {
+            val block = taskMemoryManager.allocateUnchecked(BLOCK_SIZE)
+            var currOffset = 0
+
+            while (bufferedRowIterator.hasNext && currOffset < BLOCK_SIZE) {
+              val currRow = convertToUnsafe.apply(bufferedRowIterator.head)
+              val recordSize = 4 + currRow.getSizeInBytes // 4 bytes to store (rowSize :: Int)
+
+              if (currOffset + recordSize < BLOCK_SIZE) {
+                // The memory layout is [rowSize (4) | row (rowSize)]
+                Platform.putInt(
+                  block.getBaseObject,
+                  block.getBaseOffset + currOffset,
+                  currRow.getSizeInBytes)
+                currRow.writeToMemory(block.getBaseObject, block.getBaseOffset + currOffset + 4)
+
+                // Advance iterator after writing the row
+                bufferedRowIterator.next()
+              }
+              currOffset += recordSize // Increment regardless to break loop when full
+            }
+            block
+          }
+
+          def hasNext: Boolean = bufferedRowIterator.hasNext
         }
-        Iterator(buffers)
-      }.cache()
+      }.persist(StorageLevel.MEMORY_ONLY)
 
       val baseRelation: BaseRelation = new BaseRelation with TableScan {
         override val sqlContext = _sqlContext
@@ -155,21 +179,28 @@ private[sql] abstract class SQLImplicits {
         override val needConversion = false
 
         override def buildScan(): RDD[Row] = {
-          // avoid closure capture
+          // avoid closure capture of $outer
           val numFields = this.schema.length
-          val rowSize = rowSizeInBytes
 
-          cachedRDD.flatMap { buffers =>
-            buffers.map { block =>
+          cachedRDD.flatMap { block =>
+            val rows = new ArrayBuffer[InternalRow]()
+            var currOffset = 0
+            while (currOffset < block.size()) {
+              val rowSize = Platform.getInt(
+                block.getBaseObject,
+                block.getBaseOffset + currOffset)
+              currOffset += 4
               val unsafeRow = new UnsafeRow()
               unsafeRow.pointTo(
                 block.getBaseObject,
-                block.getBaseOffset,
+                block.getBaseOffset + currOffset,
                 numFields,
                 rowSize
               )
-              unsafeRow
+              rows.append(unsafeRow)
+              currOffset += rowSize
             }
+            rows
           }.asInstanceOf[RDD[Row]]
         }
 
