@@ -127,12 +127,12 @@ private[sql] abstract class SQLImplicits {
    * @since 1.5.1
    */
   @Experimental
-  implicit class TungstenCache(df: DataFrame) extends Serializable {
-    private val BLOCK_SIZE = 4000000 // 4 MB blocks
+  implicit class TungstenCache(df: DataFrame) {
     /**
      * Packs the rows of [[df]] into contiguous blocks of memory.
      */
     def tungstenCache(): (RDD[_], DataFrame) = {
+      val BLOCK_SIZE = 4000000 // 4 MB blocks
       val schema = df.schema
 
       val convert = CatalystTypeConverters.createToCatalystConverter(schema)
@@ -144,24 +144,21 @@ private[sql] abstract class SQLImplicits {
         val taskMemoryManager = new TaskMemoryManager(SparkEnv.get.executorMemoryManager)
         new Iterator[MemoryBlock] {
 
-          // This assumes that at least one row will fit in BLOCK_SIZE
+          // This assumes that size of row < BLOCK_SIZE
           def next(): MemoryBlock = {
             val block = taskMemoryManager.allocateUnchecked(BLOCK_SIZE)
             var currOffset = 0
 
             while (bufferedRowIterator.hasNext && currOffset < BLOCK_SIZE) {
               val currRow = convertToUnsafe.apply(bufferedRowIterator.head)
-              val recordSize = 4 + currRow.getSizeInBytes // 4 bytes to store (rowSize :: Int)
+              val recordSize = 4 + currRow.getSizeInBytes
 
               if (currOffset + recordSize < BLOCK_SIZE) {
-                // The memory layout is [rowSize (4) | row (rowSize)]
+                // Pack into memory with layout [rowSize (4) | row (rowSize)]
                 Platform.putInt(
-                  block.getBaseObject,
-                  block.getBaseOffset + currOffset,
-                  currRow.getSizeInBytes)
-                currRow.writeToMemory(block.getBaseObject, block.getBaseOffset + currOffset + 4)
-
-                // Advance iterator after writing the row
+                  block.getBaseObject, block.getBaseOffset + currOffset, currRow.getSizeInBytes)
+                currRow.writeToMemory(
+                  block.getBaseObject, block.getBaseOffset + currOffset + 4)
                 bufferedRowIterator.next()
               }
               currOffset += recordSize // Increment regardless to break loop when full
@@ -179,26 +176,24 @@ private[sql] abstract class SQLImplicits {
         override val needConversion = false
 
         override def buildScan(): RDD[Row] = {
-          // avoid closure capture of $outer
           val numFields = this.schema.length
 
           cachedRDD.flatMap { block =>
             val rows = new ArrayBuffer[InternalRow]()
             var currOffset = 0
-            while (currOffset < block.size()) {
-              val rowSize = Platform.getInt(
-                block.getBaseObject,
-                block.getBaseOffset + currOffset)
+            var moreData = true
+            while (currOffset < block.size() && moreData) {
+              val rowSize = Platform.getInt(block.getBaseObject, block.getBaseOffset + currOffset)
               currOffset += 4
-              val unsafeRow = new UnsafeRow()
-              unsafeRow.pointTo(
-                block.getBaseObject,
-                block.getBaseOffset + currOffset,
-                numFields,
-                rowSize
-              )
-              rows.append(unsafeRow)
-              currOffset += rowSize
+              if (rowSize > 0) {
+                val unsafeRow = new UnsafeRow()
+                unsafeRow.pointTo(
+                  block.getBaseObject, block.getBaseOffset + currOffset, numFields, rowSize)
+                rows.append(unsafeRow)
+                currOffset += rowSize
+              } else {
+                moreData = false
+              }
             }
             rows
           }.asInstanceOf[RDD[Row]]
