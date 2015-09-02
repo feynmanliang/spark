@@ -17,23 +17,21 @@
 
 package org.apache.spark.sql
 
-import org.apache.spark.SparkEnv
-import org.apache.spark.storage.StorageLevel
-import org.apache.spark.unsafe.Platform
-
 import scala.collection.mutable.ArrayBuffer
 import scala.language.implicitConversions
 import scala.reflect.runtime.universe.TypeTag
 
+import org.apache.spark.SparkEnv
 import org.apache.spark.annotation.Experimental
 import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.types._
 import org.apache.spark.sql.catalyst.{CatalystTypeConverters, InternalRow}
-import org.apache.spark.sql.catalyst.expressions.{UnsafeProjection, UnsafeRow, SpecificMutableRow}
+import org.apache.spark.sql.catalyst.expressions.{SpecificMutableRow, UnsafeProjection, UnsafeRow}
 import org.apache.spark.sql.execution.datasources.LogicalRelation
-import org.apache.spark.sql.sources.{TableScan, BaseRelation}
-import org.apache.spark.sql.types.StructField
-import org.apache.spark.unsafe.memory.{TaskMemoryManager, UnsafeMemoryAllocator, MemoryBlock}
+import org.apache.spark.sql.sources.{BaseRelation, TableScan}
+import org.apache.spark.sql.types._
+import org.apache.spark.storage.StorageLevel
+import org.apache.spark.unsafe.Platform
+import org.apache.spark.unsafe.memory.{MemoryBlock, TaskMemoryManager}
 import org.apache.spark.unsafe.types.UTF8String
 
 /**

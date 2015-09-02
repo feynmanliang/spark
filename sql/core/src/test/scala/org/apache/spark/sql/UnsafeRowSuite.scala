@@ -21,7 +21,7 @@ import java.io.ByteArrayOutputStream
 
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.expressions.{UnsafeRow, UnsafeProjection}
+import org.apache.spark.sql.catalyst.expressions.{UnsafeProjection, UnsafeRow}
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.Platform
 import org.apache.spark.unsafe.memory.MemoryAllocator
@@ -77,13 +77,6 @@ class UnsafeRowSuite extends SparkFunSuite {
 
     assert(bytesFromArrayBackedRow === bytesFromOffheapRow)
     assert(field0StringFromArrayBackedRow === field0StringFromOffheapRow)
-  }
-
-  test("calling getString() on non-null column") {
-    val inputString = "abc"
-    val row = InternalRow.apply(inputString)
-    val unsafeRow = UnsafeProjection.create(Array[DataType](StringType)).apply(row)
-    assert(unsafeRow.getString(0) === inputString)
   }
 
   test("calling getDouble() and getFloat() on null columns") {
