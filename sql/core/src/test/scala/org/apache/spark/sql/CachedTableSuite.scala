@@ -339,25 +339,26 @@ class CachedTableSuite extends QueryTest with SharedSQLContext {
 
   test("tungsten cache uncompressed table and read") {
     val data = testData
-    val (cachedRDD, tungstenCachedDF) = data.tungstenCache("")
+    val (_, tungstenCachedDF) = data.tungstenCache("")
     assert(tungstenCachedDF.collect() === testData.collect())
   }
 
   test("tungsten cache lz4 compressed table and read") {
     val data = testData
-    val (cachedRDD, tungstenCachedDF) = data.tungstenCache("lz4")
+    val (_, tungstenCachedDF) = data.tungstenCache("lz4")
     assert(tungstenCachedDF.collect() === testData.collect())
   }
 
   test("tungsten cache lzf compressed table and read") {
     val data = testData
-    val (cachedRDD, tungstenCachedDF) = data.tungstenCache("lzf")
+    val (_, tungstenCachedDF) = data.tungstenCache("lzf")
     assert(tungstenCachedDF.collect() === testData.collect())
   }
 
   test("tungsten cache snappy compressed table and read") {
     val data = testData
-    val (cachedRDD, tungstenCachedDF) = data.tungstenCache("snappy")
+    val (_, tungstenCachedDF) = data.tungstenCache("snappy")
     assert(tungstenCachedDF.collect() === testData.collect())
   }
+
 }
