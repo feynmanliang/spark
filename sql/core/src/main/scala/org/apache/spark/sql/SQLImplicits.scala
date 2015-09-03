@@ -18,9 +18,6 @@
 package org.apache.spark.sql
 
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
-import javax.print.attribute.standard.Compression
-
-import org.apache.spark.io.CompressionCodec
 
 import scala.collection.mutable.ArrayBuffer
 import scala.language.implicitConversions
@@ -28,6 +25,7 @@ import scala.reflect.runtime.universe.TypeTag
 
 import org.apache.spark.SparkEnv
 import org.apache.spark.annotation.Experimental
+import org.apache.spark.io.CompressionCodec
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.{CatalystTypeConverters, InternalRow}
 import org.apache.spark.sql.catalyst.expressions.{SpecificMutableRow, UnsafeProjection, UnsafeRow}
@@ -244,10 +242,7 @@ private[sql] abstract class SQLImplicits {
                 val uncompressedBaos = new ByteArrayInputStream(compressedBlockArray)
                 val uncompressedBlockArray = new Array[Byte](uncompressedBaos.available())
                 codec.compressedInputStream(uncompressedBaos).read(uncompressedBlockArray)
-                new MemoryBlock(
-                  uncompressedBlockArray,
-                  Platform.BYTE_ARRAY_OFFSET,
-                  uncompressedBlockArray.length)
+                MemoryBlock.fromByteArray(uncompressedBlockArray)
               case None => rawBlock
             }
             val rows = new ArrayBuffer[InternalRow]()
