@@ -142,16 +142,15 @@ private[sql] abstract class SQLImplicits {
 
       val convert = CatalystTypeConverters.createToCatalystConverter(schema)
       val internalRows = df.rdd.map(convert(_).asInstanceOf[InternalRow])
-      val _compressionType: String = compressionType
       val cachedRDD = internalRows.mapPartitions { rowIterator =>
         val bufferedRowIterator = rowIterator.buffered
 
         val convertToUnsafe = UnsafeProjection.create(schema)
         val taskMemoryManager = new TaskMemoryManager(SparkEnv.get.executorMemoryManager)
-        val compressionCodec: Option[CompressionCodec] = if (_compressionType.isEmpty)
+        val compressionCodec: Option[CompressionCodec] = if (compressionType.isEmpty)
           None
         else
-          Some(CompressionCodec.createCodec(SparkEnv.get.conf, _compressionType))
+          Some(CompressionCodec.createCodec(SparkEnv.get.conf, compressionType))
         new Iterator[MemoryBlock] {
 
           // This assumes that size of row < BLOCK_SIZE
@@ -177,7 +176,6 @@ private[sql] abstract class SQLImplicits {
             // Optionally compress block before writing
             compressionCodec match {
               case Some(codec) =>
-                // Pack into memory with layout [paddingSize(4)| compressedRow (padded to word bdy)]
                 val blockArray = new Array[Byte](BLOCK_SIZE)
                 Platform.copyMemory(
                   block.getBaseObject,
@@ -188,9 +186,13 @@ private[sql] abstract class SQLImplicits {
                 val compressedBaos = new ByteArrayOutputStream(BLOCK_SIZE)
                 codec.compressedOutputStream(compressedBaos).write(blockArray)
                 val compressedBlockArray = compressedBaos.toByteArray
-                val padding = (8 - (compressedBlockArray.size % 8)) % 8
+
+                // Pad block to word boundary
+                val padding = ((8 - (compressedBlockArray.size % 8)) % 8) + 4
                 val compressedBlock = taskMemoryManager.allocateUnchecked(
                   4 + compressedBlockArray.size + padding)
+
+                // Store [padding(4)|compressedBlock]
                 Platform.putInt(
                   compressedBlock.getBaseObject,
                   compressedBlock.getBaseOffset,
@@ -240,6 +242,12 @@ private[sql] abstract class SQLImplicits {
                 val uncompressedBlockArray = new Array[Byte](uncompressedBaos.available())
                 codec.compressedInputStream(uncompressedBaos).read(uncompressedBlockArray)
                 val uncompressedBlock = taskMemoryManager.allocateUnchecked(
+                  uncompressedBlockArray.size)
+                Platform.copyMemory(
+                  uncompressedBlockArray,
+                  Platform.BYTE_ARRAY_OFFSET,
+                  uncompressedBlock.getBaseObject,
+                  uncompressedBlock.getBaseOffset,
                   uncompressedBlockArray.size)
                 taskMemoryManager.freeUnchecked(rawBlock)
                 uncompressedBlock
