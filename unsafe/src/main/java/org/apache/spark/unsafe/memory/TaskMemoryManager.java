@@ -197,6 +197,15 @@ public class TaskMemoryManager {
   }
 
   /**
+   * Frees a contiguous block of memory, without checking for leaks provided by
+   * {@code allocatedNonPageMemory}
+   */
+  public void freeUnchecked(MemoryBlock memory) {
+    assert (memory.pageNumber == -1) : "Should call freePage() for pages, not free()";
+    executorMemoryManager.free(memory);
+  }
+
+  /**
    * Given a memory page and offset within that page, encode this address into a 64-bit long.
    * This address will remain valid as long as the corresponding page has not been freed.
    *

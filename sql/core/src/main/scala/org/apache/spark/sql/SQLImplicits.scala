@@ -17,6 +17,11 @@
 
 package org.apache.spark.sql
 
+import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
+import javax.print.attribute.standard.Compression
+
+import org.apache.spark.io.CompressionCodec
+
 import scala.collection.mutable.ArrayBuffer
 import scala.language.implicitConversions
 import scala.reflect.runtime.universe.TypeTag
@@ -128,10 +133,16 @@ private[sql] abstract class SQLImplicits {
   implicit class TungstenCache(df: DataFrame) {
     /**
      * Packs the rows of [[df]] into contiguous blocks of memory.
+     * @param compressionType "" (default), "lz4", "lzf", or "snappy", see
+     *                        [[CompressionCodec.ALL_COMPRESSION_CODECS]]
      */
-    def tungstenCache(): (RDD[_], DataFrame) = {
+    def tungstenCache(compressionType: String = ""): (RDD[_], DataFrame) = {
       val BLOCK_SIZE = 4000000 // 4 MB blocks
       val schema = df.schema
+      val compressionCodec: Option[CompressionCodec] = if (compressionType.isEmpty)
+        None
+      else
+        Some(CompressionCodec.createCodec(df.sqlContext.sparkContext.getConf, compressionType))
 
       val convert = CatalystTypeConverters.createToCatalystConverter(schema)
       val internalRows = df.rdd.map(convert(_).asInstanceOf[InternalRow])
@@ -161,7 +172,31 @@ private[sql] abstract class SQLImplicits {
               }
               currOffset += recordSize // Increment regardless to break loop when full
             }
-            block
+
+            // Optionally Compress block before writing
+            compressionCodec match {
+              case Some(codec) =>
+                val blockArray = new Array[Byte](BLOCK_SIZE)
+                Platform.copyMemory(
+                  block.getBaseObject,
+                  block.getBaseOffset,
+                  blockArray,
+                  Platform.BYTE_ARRAY_OFFSET,
+                  block.size())
+                val compressedBaos = new ByteArrayOutputStream(BLOCK_SIZE)
+                codec.compressedOutputStream(compressedBaos).write(blockArray)
+                val compressedBlockArray = compressedBaos.toByteArray
+                val compressedBlock = taskMemoryManager.allocateUnchecked(compressedBlockArray.size)
+                Platform.copyMemory(
+                  compressedBlockArray,
+                  Platform.BYTE_ARRAY_OFFSET,
+                  compressedBlock.getBaseObject,
+                  compressedBlock.getBaseOffset,
+                  compressedBlockArray.size)
+                taskMemoryManager.freeUnchecked(block)
+                compressedBlock
+              case None => block
+            }
           }
 
           def hasNext: Boolean = bufferedRowIterator.hasNext
@@ -176,7 +211,27 @@ private[sql] abstract class SQLImplicits {
         override def buildScan(): RDD[Row] = {
           val numFields = this.schema.length
 
-          cachedRDD.flatMap { block =>
+          val taskMemoryManager = new TaskMemoryManager(SparkEnv.get.executorMemoryManager)
+          cachedRDD.flatMap { rawBlock =>
+            val block = compressionCodec match {
+              case Some(codec) =>
+                val compressedBlockArray = new Array[Byte](rawBlock.size().toInt)
+                Platform.copyMemory(
+                  rawBlock.getBaseObject,
+                  rawBlock.getBaseOffset,
+                  compressedBlockArray,
+                  Platform.BYTE_ARRAY_OFFSET,
+                  rawBlock.size()
+                )
+                val uncompressedBaos = new ByteArrayInputStream(compressedBlockArray)
+                val uncompressedBlockArray = new Array[Byte](BLOCK_SIZE)
+                codec.compressedInputStream(uncompressedBaos).read(uncompressedBlockArray)
+                val uncompressedBlock = taskMemoryManager.allocateUnchecked(
+                  uncompressedBlockArray.size)
+                taskMemoryManager.freeUnchecked(rawBlock)
+                uncompressedBlock
+              case None => rawBlock
+            }
             val rows = new ArrayBuffer[InternalRow]()
             var currOffset = 0
             var moreData = true
