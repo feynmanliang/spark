@@ -147,35 +147,34 @@ private[sql] abstract class SQLImplicits {
 
         val convertToUnsafe = UnsafeProjection.create(schema)
         val taskMemoryManager = new TaskMemoryManager(SparkEnv.get.executorMemoryManager)
-        val compressionCodec: Option[CompressionCodec] = if (compressionType.isEmpty)
+        val compressionCodec: Option[CompressionCodec] = if (compressionType.isEmpty) {
           None
-        else
+        } else {
           Some(CompressionCodec.createCodec(SparkEnv.get.conf, compressionType))
+        }
         new Iterator[MemoryBlock] {
-
           // This assumes that size of row < BLOCK_SIZE
           def next(): MemoryBlock = {
+            // Packs rows into a 4 MB contiguous block, starts a new block on overflow
+            // Each row in laid out in memory as [rowSize (4) | row (rowSize)]
             val block = taskMemoryManager.allocateUnchecked(BLOCK_SIZE)
             var currOffset = 0
-
             while (bufferedRowIterator.hasNext && currOffset < BLOCK_SIZE) {
               val currRow = convertToUnsafe.apply(bufferedRowIterator.head)
               val recordSize = 4 + currRow.getSizeInBytes
-
               if (currOffset + recordSize < BLOCK_SIZE) {
-                // Pack into memory with layout [rowSize (4) | row (rowSize)]
                 Platform.putInt(
                   block.getBaseObject, block.getBaseOffset + currOffset, currRow.getSizeInBytes)
-                currRow.writeToMemory(
-                  block.getBaseObject, block.getBaseOffset + currOffset + 4)
+                currRow.writeToMemory(block.getBaseObject, block.getBaseOffset + currOffset + 4)
                 bufferedRowIterator.next()
               }
-              currOffset += recordSize // Increment regardless to break loop when full
+              currOffset += recordSize // Increment currOffset regardless to break loop when full
             }
 
             // Optionally compress block before writing
             compressionCodec match {
               case Some(codec) =>
+                // Compress the block using an on-heap byte array
                 val blockArray = new Array[Byte](BLOCK_SIZE)
                 Platform.copyMemory(
                   block.getBaseObject,
@@ -187,12 +186,12 @@ private[sql] abstract class SQLImplicits {
                 codec.compressedOutputStream(compressedBaos).write(blockArray)
                 val compressedBlockArray = compressedBaos.toByteArray
 
-                // Pad block to word boundary
+                // Allocate new block padded to word boundary
                 val padding = ((8 - (compressedBlockArray.size % 8)) % 8) + 4
                 val compressedBlock = taskMemoryManager.allocateUnchecked(
                   4 + compressedBlockArray.size + padding)
 
-                // Store [padding(4)|compressedBlock]
+                // Store compressed block with layout [padding (4) | compressedBlock]
                 Platform.putInt(
                   compressedBlock.getBaseObject,
                   compressedBlock.getBaseOffset,
@@ -224,12 +223,14 @@ private[sql] abstract class SQLImplicits {
 
           cachedRDD.flatMap { rawBlock =>
             val taskMemoryManager = new TaskMemoryManager(SparkEnv.get.executorMemoryManager)
-            val compressionCodec: Option[CompressionCodec] = if (_compressionType.isEmpty)
+            val compressionCodec: Option[CompressionCodec] = if (_compressionType.isEmpty) {
               None
-            else
+            } else {
               Some(CompressionCodec.createCodec(SparkEnv.get.conf, _compressionType))
+            }
             val block = compressionCodec match {
               case Some(codec) =>
+                // Copy compressed block (excluding padding) to on-heap byte array
                 val compressedBlockArray = new Array[Byte](rawBlock.size().toInt)
                 val padding = Platform.getInt(rawBlock.getBaseObject, rawBlock.getBaseOffset)
                 Platform.copyMemory(
@@ -238,19 +239,15 @@ private[sql] abstract class SQLImplicits {
                   compressedBlockArray,
                   Platform.BYTE_ARRAY_OFFSET,
                   rawBlock.size() - padding)
+
+                // Decompress block into MemoryBlock backed by on-heap byte array
                 val uncompressedBaos = new ByteArrayInputStream(compressedBlockArray)
                 val uncompressedBlockArray = new Array[Byte](uncompressedBaos.available())
                 codec.compressedInputStream(uncompressedBaos).read(uncompressedBlockArray)
-                val uncompressedBlock = taskMemoryManager.allocateUnchecked(
-                  uncompressedBlockArray.size)
-                Platform.copyMemory(
+                new MemoryBlock(
                   uncompressedBlockArray,
                   Platform.BYTE_ARRAY_OFFSET,
-                  uncompressedBlock.getBaseObject,
-                  uncompressedBlock.getBaseOffset,
-                  uncompressedBlockArray.size)
-                taskMemoryManager.freeUnchecked(rawBlock)
-                uncompressedBlock
+                  uncompressedBlockArray.length)
               case None => rawBlock
             }
             val rows = new ArrayBuffer[InternalRow]()
