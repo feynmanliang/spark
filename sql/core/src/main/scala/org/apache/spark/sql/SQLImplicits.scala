@@ -208,7 +208,7 @@ private[sql] abstract class SQLImplicits {
 
           def hasNext: Boolean = bufferedRowIterator.hasNext
         }
-      }.persist(StorageLevel.MEMORY_ONLY)
+      }.setName(df.rdd.name + "_" + compressionType).persist(StorageLevel.MEMORY_ONLY)
 
       val baseRelation: BaseRelation = new BaseRelation with TableScan {
         override val sqlContext = _sqlContext
@@ -218,6 +218,7 @@ private[sql] abstract class SQLImplicits {
         override def buildScan(): RDD[Row] = {
           val numFields = this.schema.length
           val _compressionType: String = compressionType
+          val _BLOCK_SIZE = BLOCK_SIZE
 
           cachedRDD.flatMap { rawBlock =>
             val taskMemoryManager = new TaskMemoryManager(SparkEnv.get.executorMemoryManager)
@@ -239,9 +240,10 @@ private[sql] abstract class SQLImplicits {
                   rawBlock.size() - padding)
 
                 // Decompress block into MemoryBlock backed by on-heap byte array
-                val uncompressedBaos = new ByteArrayInputStream(compressedBlockArray)
-                val uncompressedBlockArray = new Array[Byte](uncompressedBaos.available())
-                codec.compressedInputStream(uncompressedBaos).read(uncompressedBlockArray)
+                val compressedBaos = new ByteArrayInputStream(compressedBlockArray)
+                val uncompressedBlockArray = new Array[Byte](_BLOCK_SIZE)
+                codec.compressedInputStream(compressedBaos).read(
+                  uncompressedBlockArray, 0, compressedBaos.available())
                 MemoryBlock.fromByteArray(uncompressedBlockArray)
               case None => rawBlock
             }
@@ -251,6 +253,7 @@ private[sql] abstract class SQLImplicits {
             while (currOffset < block.size() && moreData) {
               val rowSize = Platform.getInt(block.getBaseObject, block.getBaseOffset + currOffset)
               currOffset += 4
+              // TODO: should probably have a null terminator rather than relying on zeroed out
               if (rowSize > 0) {
                 val unsafeRow = new UnsafeRow()
                 unsafeRow.pointTo(
