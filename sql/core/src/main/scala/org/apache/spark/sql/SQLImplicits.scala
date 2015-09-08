@@ -279,6 +279,7 @@ private[sql] abstract class SQLImplicits {
 
         override def toString: String = getClass.getSimpleName + s"[${df.toString}]"
       }
+      cachedRDD.count // trigger caching action because it's lazy
       (cachedRDD, DataFrame(_sqlContext, LogicalRelation(baseRelation)))
     }
   }

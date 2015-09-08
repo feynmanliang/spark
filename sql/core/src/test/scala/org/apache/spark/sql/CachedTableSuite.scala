@@ -340,26 +340,26 @@ class CachedTableSuite extends QueryTest with SharedSQLContext {
   test("tungsten cache uncompressed table and read") {
     val data = testData
     // Use a 0.4 KB block size to force multiple blocks
-    val (_, tungstenCachedDF) = data.tungstenCache("", 400)
-    assert(tungstenCachedDF.collect() === testData.collect())
+    val (_, tungstenCachedDF) = data.tungstenCache("", 104)
+    checkAnswer(tungstenCachedDF, testData)
   }
 
   test("tungsten cache lz4 compressed table and read") {
     val data = testData
-    val (_, tungstenCachedDF) = data.tungstenCache("lz4", 400)
-    assert(tungstenCachedDF.collect() === testData.collect())
+    val (_, tungstenCachedDF) = data.tungstenCache("lz4", 104)
+    checkAnswer(tungstenCachedDF, testData)
   }
 
   test("tungsten cache lzf compressed table and read") {
     val data = testData
-    val (_, tungstenCachedDF) = data.tungstenCache("lzf", 400)
-    assert(tungstenCachedDF.collect() === testData.collect())
+    val (_, tungstenCachedDF) = data.tungstenCache("lzf", 104)
+    checkAnswer(tungstenCachedDF, testData)
   }
 
   test("tungsten cache snappy compressed table and read") {
     val data = testData
-    val (_, tungstenCachedDF) = data.tungstenCache("snappy", 400)
-    assert(tungstenCachedDF.collect() === testData.collect())
+    val (_, tungstenCachedDF) = data.tungstenCache("snappy", 104)
+    checkAnswer(tungstenCachedDF, testData)
   }
 
 }
