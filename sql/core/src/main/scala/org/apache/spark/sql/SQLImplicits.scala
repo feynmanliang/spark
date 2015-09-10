@@ -17,7 +17,7 @@
 
 package org.apache.spark.sql
 
-import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
+import java.io.{DataInputStream, ByteArrayInputStream, ByteArrayOutputStream}
 
 import scala.collection.mutable.ArrayBuffer
 import scala.language.implicitConversions
@@ -251,21 +251,22 @@ private[sql] abstract class SQLImplicits {
                 // Decompress into MemoryBlock backed by on-heap byte array
                 val compressedBais = new ByteArrayInputStream(compressedBlockArray)
                 val uncompressedBlockArray = new Array[Byte](_blockSize)
-                val cis = codec.compressedInputStream(compressedBais)
+                val cdis = new DataInputStream(codec.compressedInputStream(compressedBais))
                 // compression codec has its own block size and cis.read only reads one compression
                 // codec block, so we need to keep reading until cis is exhausted
-                (() => {
-                  var cumNumRead = 0
-                  var numRead = cis.read(uncompressedBlockArray)
-                  while (numRead > 0) {
-                    cumNumRead += numRead
-                    numRead = cis.read(
-                      uncompressedBlockArray,
-                      cumNumRead,
-                      uncompressedBlockArray.length - cumNumRead)
-                  }
-                })()
-                cis.close()
+                // TODO: Use DataInputStream.readFully()
+                cdis.readFully(uncompressedBlockArray)
+//                var cumNumRead = 0
+//                var numRead = cis.read(uncompressedBlockArray)
+//                while (numRead > 0) {
+//                  cumNumRead += numRead
+//                  numRead = cis.read(
+//                    uncompressedBlockArray,
+//                    cumNumRead,
+//                    uncompressedBlockArray.length - cumNumRead)
+//                }
+//                cis.close()
+                cdis.close()
                 MemoryBlock.fromByteArray(uncompressedBlockArray)
               case None => rawBlock
             }
