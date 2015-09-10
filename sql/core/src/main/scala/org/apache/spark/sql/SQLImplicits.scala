@@ -254,13 +254,17 @@ private[sql] abstract class SQLImplicits {
                 val cis = codec.compressedInputStream(compressedBais)
                 // compression codec has its own block size and cis.read only reads one compression
                 // codec block, so we need to keep reading until cis is exhausted
-                var numCompressionBlocksRead = cis.read(uncompressedBlockArray)
-                while (numCompressionBlocksRead > 0) {
-                  numCompressionBlocksRead = cis.read(
-                    uncompressedBlockArray,
-                    numCompressionBlocksRead,
-                    uncompressedBlockArray.length - numCompressionBlocksRead)
-                }
+                (() => {
+                  var cumNumRead = 0
+                  var numRead = cis.read(uncompressedBlockArray)
+                  while (numRead > 0) {
+                    cumNumRead += numRead
+                    numRead = cis.read(
+                      uncompressedBlockArray,
+                      cumNumRead,
+                      uncompressedBlockArray.length - cumNumRead)
+                  }
+                })()
                 cis.close()
                 MemoryBlock.fromByteArray(uncompressedBlockArray)
               case None => rawBlock
