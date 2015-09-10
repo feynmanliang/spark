@@ -161,6 +161,7 @@ private[sql] abstract class SQLImplicits {
             val block = taskMemoryManager.allocateUnchecked(blockSize)
 
             var currOffset = 0
+            val seenRows = ArrayBuffer[InternalRow]()
             while (bufferedRowIterator.hasNext && currOffset < blockSize) {
               val currRow = convertToUnsafe.apply(bufferedRowIterator.head)
               val recordSize = 4 + currRow.getSizeInBytes
@@ -168,6 +169,7 @@ private[sql] abstract class SQLImplicits {
                 Platform.putInt(
                   block.getBaseObject, block.getBaseOffset + currOffset, currRow.getSizeInBytes)
                 currRow.writeToMemory(block.getBaseObject, block.getBaseOffset + currOffset + 4)
+                seenRows += currRow
                 bufferedRowIterator.next()
               }
               currOffset += recordSize // Increment currOffset regardless to break loop when full
@@ -247,10 +249,18 @@ private[sql] abstract class SQLImplicits {
                   rawBlock.size() - padding)
 
                 // Decompress into MemoryBlock backed by on-heap byte array
-                val compressedBaos = new ByteArrayInputStream(compressedBlockArray)
+                val compressedBais = new ByteArrayInputStream(compressedBlockArray)
                 val uncompressedBlockArray = new Array[Byte](_blockSize)
-                val cis = codec.compressedInputStream(compressedBaos)
-                cis.read(uncompressedBlockArray)
+                val cis = codec.compressedInputStream(compressedBais)
+                // compression codec has its own block size and cis.read only reads one compression
+                // codec block, so we need to keep reading until cis is exhausted
+                var numCompressionBlocksRead = cis.read(uncompressedBlockArray)
+                while (numCompressionBlocksRead > 0) {
+                  numCompressionBlocksRead = cis.read(
+                    uncompressedBlockArray,
+                    numCompressionBlocksRead,
+                    uncompressedBlockArray.length - numCompressionBlocksRead)
+                }
                 cis.close()
                 MemoryBlock.fromByteArray(uncompressedBlockArray)
               case None => rawBlock
